@@ -54,6 +54,15 @@ impl CommandHandler for SpeedExecutor {
             }
         };
 
+        #[cfg(feature = "development-logs")]
+        tracing::debug!(
+            "SpeedExecutor execution context: speed_type={:?}, multiplier={}, has_target={}, is_reset={}",
+            self.speed_type,
+            multiplier,
+            self.has_target,
+            self.is_reset
+        );
+
         // 3. Enforce safe boundaries (from config limits)
         {
             let state = STATE.lock().unwrap();
@@ -398,6 +407,25 @@ impl CommandHandler for ReloadExecutor {
         msg.color_named(NamedColor::Green);
         let _ = sender.send_message(msg);
 
+        Ok(1)
+    }
+}
+
+#[cfg(feature = "extras")]
+pub struct ExperimentalExecutor;
+
+#[cfg(feature = "extras")]
+impl CommandHandler for ExperimentalExecutor {
+    fn handle(
+        &self,
+        sender: CommandSender,
+        _server: Server,
+        _args: ConsumedArgs,
+    ) -> Result<i32, CommandError> {
+        let msg =
+            TextComponent::text("Running in experimental mode! Speed multipliers are augmented.");
+        msg.color_named(NamedColor::LightPurple);
+        let _ = sender.send_message(msg);
         Ok(1)
     }
 }

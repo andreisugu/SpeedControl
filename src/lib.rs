@@ -126,6 +126,9 @@ impl Plugin for SpeedPlugin {
         let folder = context.get_data_folder();
         tracing::info!("SpeedControl Plugin loading... Data folder: '{}'", folder);
 
+        #[cfg(feature = "development-logs")]
+        tracing::debug!("Development Logs feature enabled. Debug traces active.");
+
         // Initialize state with data folder
         {
             let mut state = STATE.lock().unwrap();
@@ -264,6 +267,13 @@ impl Plugin for SpeedPlugin {
         // /speed reload
         let reload_node = CommandNode::literal("reload").execute(ReloadExecutor);
         speed_cmd.then(reload_node);
+
+        #[cfg(feature = "extras")]
+        {
+            let experimental_node =
+                CommandNode::literal("experimental").execute(commands::ExperimentalExecutor);
+            speed_cmd.then(experimental_node);
+        }
 
         context.register_command(speed_cmd, "SpeedControl:command.speed");
 

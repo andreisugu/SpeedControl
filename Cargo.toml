@@ -19,3 +19,8 @@ mockall = "0.13"
 
 [profile.release]
 lto = true
+
+[features]
+default = []
+development-logs = []
+extras = []

@@ -40,6 +40,11 @@ impl SpeedStore for JsonPlayerSpeedStore {
         match std::fs::read_to_string(&path) {
             Ok(content) => {
                 let speeds = serde_json::from_str::<HashMap<String, PlayerSpeedData>>(&content)?;
+                #[cfg(feature = "development-logs")]
+                tracing::debug!(
+                    "Loaded {} player speed records from persistent store",
+                    speeds.len()
+                );
                 Ok(speeds)
             }
             Err(err) => {
@@ -62,6 +67,11 @@ impl SpeedStore for JsonPlayerSpeedStore {
         let path = self.file_path();
         let content = serde_json::to_string_pretty(speeds)?;
         std::fs::write(&path, content)?;
+        #[cfg(feature = "development-logs")]
+        tracing::debug!(
+            "Saved {} player speed records to persistent store",
+            speeds.len()
+        );
         Ok(())
     }
 }

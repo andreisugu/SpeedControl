@@ -13,8 +13,16 @@ param(
     [switch]$Dev,
     [switch]$Lint,
     [switch]$Test,
+    [string]$Features,
     [string]$DeployDir = "C:\Users\RestlessGlass\Desktop\Pumpkin\plugins"
 )
+
+# Parse feature flags for cargo commands
+$featureFlags = @()
+if ($Features) {
+    Write-Host "Compiling with features: $Features" -ForegroundColor Cyan
+    $featureFlags = @("--features", $Features)
+}
 
 # 1. Clean target folders if requested
 if ($Clean) {
@@ -42,10 +50,36 @@ if ($Lint) {
     }
 
     Write-Host "Running clippy..." -ForegroundColor Cyan
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --all-targets @featureFlags -- -D warnings
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Clippy lint checks failed!"
         exit $LASTEXITCODE
+    }
+
+    # Run cargo deny locally if installed
+    if (Get-Command "cargo-deny" -ErrorAction SilentlyContinue) {
+        Write-Host "Running cargo deny..." -ForegroundColor Cyan
+        cargo deny check @featureFlags
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Cargo deny checks failed!"
+            exit $LASTEXITCODE
+        }
+    } else {
+        Write-Host "cargo-deny is not installed. Skipping local license/source audits." -ForegroundColor Yellow
+        Write-Host "To install: cargo install --locked cargo-deny" -ForegroundColor Yellow
+    }
+
+    # Run cargo audit locally if installed
+    if (Get-Command "cargo-audit" -ErrorAction SilentlyContinue) {
+        Write-Host "Running cargo audit..." -ForegroundColor Cyan
+        cargo audit
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Cargo audit vulnerability scan failed!"
+            exit $LASTEXITCODE
+        }
+    } else {
+        Write-Host "cargo-audit is not installed. Skipping local security audits." -ForegroundColor Yellow
+        Write-Host "To install: cargo install cargo-audit --locked" -ForegroundColor Yellow
     }
 }
 
@@ -55,7 +89,7 @@ if ($Test) {
     # Dynamically resolve native host target
     $rustcHost = (rustc -vV | Select-String "host:").Line.Split(" ")[1].Trim()
     Write-Host "Detected native host target: $rustcHost" -ForegroundColor Cyan
-    cargo test --target $rustcHost
+    cargo test --target $rustcHost @featureFlags
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Unit tests failed!"
         exit $LASTEXITCODE
@@ -72,7 +106,7 @@ if ($Dev) {
 
 # 3. Build the plugin
 Write-Host "Compiling plugin (profile: $profile)..." -ForegroundColor Cyan
-cargo build @buildFlags
+cargo build @buildFlags @featureFlags
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Cargo build failed!"
     exit $LASTEXITCODE
