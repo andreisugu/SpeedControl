@@ -130,3 +130,63 @@ jobs:
             permission_cache.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  nightly:
+    name: Build & Release Nightly
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # required to push tags back to git
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Build WASM Component (Release)
+        run: cargo build --release --target wasm32-wasip2
+
+      - name: Generate permission_cache.json
+        run: |
+          WASM_PATH="target/wasm32-wasip2/release/SpeedControl.wasm"
+          HASH=$(sha256sum "$WASM_PATH" | cut -d ' ' -f 1)
+          echo "Generated hash: $HASH"
+          cat <<EOF > permission_cache.json
+          {
+            "entries": {
+              "$HASH": {
+                "permissions_requested": [
+                  "fs.read.data",
+                  "fs.write.data"
+                ],
+                "approved": true
+              }
+            }
+          }
+          EOF
+
+      - name: Update Nightly Git Tag
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git tag -f nightly
+          git push -f origin nightly
+
+      - name: Upload Nightly Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: "Nightly Build"
+          body: "Automatic nightly pre-release compiled from the latest commit on main. Commit: ${{ github.sha }}."
+          prerelease: true
+          files: |
+            target/wasm32-wasip2/release/SpeedControl.wasm
+            permission_cache.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
