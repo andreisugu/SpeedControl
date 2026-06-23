@@ -11,6 +11,8 @@
 param(
     [switch]$Clean,
     [switch]$Dev,
+    [switch]$Lint,
+    [switch]$Test,
     [string]$DeployDir = "C:\Users\RestlessGlass\Desktop\Pumpkin\plugins"
 )
 
@@ -26,6 +28,37 @@ if ($Clean) {
             Write-Host "Removing duplicate folder: $folder" -ForegroundColor Yellow
             Remove-Item -Path $folder -Recurse -Force
         }
+    }
+}
+
+# 1b. Run Lint Checks if requested
+if ($Lint) {
+    Write-Host "Running code formatting and clippy lint checks..." -ForegroundColor Cyan
+    Write-Host "Running cargo fmt..." -ForegroundColor Cyan
+    cargo fmt --all -- --check
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Formatting check failed! Run 'cargo fmt' to resolve."
+        exit $LASTEXITCODE
+    }
+
+    Write-Host "Running clippy..." -ForegroundColor Cyan
+    cargo clippy --all-targets -- -D warnings
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Clippy lint checks failed!"
+        exit $LASTEXITCODE
+    }
+}
+
+# 1c. Run Tests if requested
+if ($Test) {
+    Write-Host "Running unit tests natively..." -ForegroundColor Cyan
+    # Dynamically resolve native host target
+    $rustcHost = (rustc -vV | Select-String "host:").Line.Split(" ")[1].Trim()
+    Write-Host "Detected native host target: $rustcHost" -ForegroundColor Cyan
+    cargo test --target $rustcHost
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Unit tests failed!"
+        exit $LASTEXITCODE
     }
 }
 

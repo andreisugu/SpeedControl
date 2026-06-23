@@ -1,12 +1,12 @@
 use pumpkin_plugin_api::{
+    Server,
     command_wit::{Arg, CommandError, CommandSender, ConsumedArgs, Number},
     commands::CommandHandler,
     text::{NamedColor, TextComponent},
-    Server,
 };
 
-use crate::speed_type::SpeedType;
 use crate::STATE;
+use crate::speed_type::SpeedType;
 
 pub struct SpeedExecutor {
     pub speed_type: SpeedType,
@@ -47,7 +47,8 @@ impl CommandHandler for SpeedExecutor {
                 Arg::Num(Ok(Number::Float32(val))) => val,
                 Arg::Num(Ok(Number::Float64(val))) => val as f32,
                 _ => {
-                    let err_msg = TextComponent::text("Invalid multiplier number! Use decimals like 1.5");
+                    let err_msg =
+                        TextComponent::text("Invalid multiplier number! Use decimals like 1.5");
                     return Err(CommandError::CommandFailed(err_msg));
                 }
             }
@@ -57,23 +58,29 @@ impl CommandHandler for SpeedExecutor {
         {
             let state = STATE.lock().unwrap();
             match self.speed_type {
-                SpeedType::Fly => {
-                    if multiplier > state.config.max_fly_speed_multiplier {
-                        let err = TextComponent::text(&format!(
-                            "Multiplier exceeds the server cap of {}x for flight speed.",
-                            state.config.max_fly_speed_multiplier
-                        ));
-                        return Err(CommandError::CommandFailed(err));
-                    }
+                SpeedType::Fly if multiplier > state.config.max_fly_speed_multiplier => {
+                    tracing::warn!(
+                        multiplier,
+                        limit = state.config.max_fly_speed_multiplier,
+                        "Multiplier exceeds config flying speed limit"
+                    );
+                    let err = TextComponent::text(&format!(
+                        "Multiplier exceeds the server cap of {}x for flight speed.",
+                        state.config.max_fly_speed_multiplier
+                    ));
+                    return Err(CommandError::CommandFailed(err));
                 }
-                SpeedType::Walk => {
-                    if multiplier > state.config.max_walk_speed_multiplier {
-                        let err = TextComponent::text(&format!(
-                            "Multiplier exceeds the server cap of {}x for walking speed.",
-                            state.config.max_walk_speed_multiplier
-                        ));
-                        return Err(CommandError::CommandFailed(err));
-                    }
+                SpeedType::Walk if multiplier > state.config.max_walk_speed_multiplier => {
+                    tracing::warn!(
+                        multiplier,
+                        limit = state.config.max_walk_speed_multiplier,
+                        "Multiplier exceeds config walking speed limit"
+                    );
+                    let err = TextComponent::text(&format!(
+                        "Multiplier exceeds the server cap of {}x for walking speed.",
+                        state.config.max_walk_speed_multiplier
+                    ));
+                    return Err(CommandError::CommandFailed(err));
                 }
                 _ => {}
             }
@@ -93,13 +100,17 @@ impl CommandHandler for SpeedExecutor {
             if let Some(player) = sender.as_player() {
                 vec![player]
             } else {
-                let msg = TextComponent::text("This command must be executed by a player, or target player(s) must be specified.");
+                let msg = TextComponent::text(
+                    "This command must be executed by a player, or target player(s) must be specified.",
+                );
                 return Err(CommandError::CommandFailed(msg));
             }
         };
 
         if targets.is_empty() {
-            let err_msg = TextComponent::text("No target players found (players are offline or selection is empty).");
+            let err_msg = TextComponent::text(
+                "No target players found (players are offline or selection is empty).",
+            );
             return Err(CommandError::CommandFailed(err_msg));
         }
 
@@ -110,7 +121,7 @@ impl CommandHandler for SpeedExecutor {
         for player in &targets {
             let id = player.get_id();
             let uuid_str = format!("{:016x}{:016x}", id.high, id.low);
-            let entry = state.player_speeds.entry(uuid_str).or_default();
+            let entry = state.player_speeds.entry(uuid_str.clone()).or_default();
 
             match self.speed_type {
                 SpeedType::Fly => {
@@ -124,6 +135,13 @@ impl CommandHandler for SpeedExecutor {
                     } else {
                         entry.fly_multiplier = Some(multiplier);
                     }
+
+                    tracing::info!(
+                        player_name = player.get_name(),
+                        player_uuid = %uuid_str,
+                        multiplier,
+                        "Set player flying speed"
+                    );
 
                     // Notify sender
                     let sender_msg = TextComponent::text(&format!(
@@ -157,6 +175,13 @@ impl CommandHandler for SpeedExecutor {
                         entry.walk_multiplier = Some(multiplier);
                     }
 
+                    tracing::info!(
+                        player_name = player.get_name(),
+                        player_uuid = %uuid_str,
+                        multiplier,
+                        "Set player walking speed"
+                    );
+
                     // Notify sender
                     let sender_msg = TextComponent::text(&format!(
                         "Walking speed multiplier for {} set to: {} (raw speed: {})",
@@ -182,7 +207,15 @@ impl CommandHandler for SpeedExecutor {
         }
 
         // Save DB file
-        state.save_speeds();
+        if let Err(err) = state.save_speeds() {
+            tracing::error!(
+                error = %err,
+                "Failed to save speed adjustments to disk"
+            );
+            return Err(CommandError::CommandFailed(TextComponent::text(
+                "Internal error: speed saved successfully in memory but failed to write to disk.",
+            )));
+        }
 
         Ok(targets.len() as i32)
     }
@@ -203,20 +236,26 @@ impl CommandHandler for InfoExecutor {
             let target_arg = args.get_value("target");
             match target_arg {
                 Arg::Players(players) => players,
-                _ => return Err(CommandError::CommandFailed(TextComponent::text("Invalid target argument!"))),
+                _ => {
+                    return Err(CommandError::CommandFailed(TextComponent::text(
+                        "Invalid target argument!",
+                    )));
+                }
             }
         } else {
             if let Some(player) = sender.as_player() {
                 vec![player]
             } else {
                 return Err(CommandError::CommandFailed(TextComponent::text(
-                    "This command must be executed by a player, or target player(s) must be specified."
+                    "This command must be executed by a player, or target player(s) must be specified.",
                 )));
             }
         };
 
         if targets.is_empty() {
-            return Err(CommandError::CommandFailed(TextComponent::text("No target players found (players are offline or selection is empty).")));
+            return Err(CommandError::CommandFailed(TextComponent::text(
+                "No target players found (players are offline or selection is empty).",
+            )));
         }
 
         for player in &targets {
@@ -224,15 +263,22 @@ impl CommandHandler for InfoExecutor {
             let fly_mult = abilities.fly_speed / 0.05;
             let walk_mult = abilities.walk_speed / 0.1;
 
-            let header = TextComponent::text(&format!("--- Speed status for {} ---", player.get_name()));
+            let header =
+                TextComponent::text(&format!("--- Speed status for {} ---", player.get_name()));
             header.color_named(NamedColor::Gold);
             let _ = sender.send_message(header);
 
-            let walk_msg = TextComponent::text(&format!("  Walking Speed: {:.2}x (raw: {:.4})", walk_mult, abilities.walk_speed));
+            let walk_msg = TextComponent::text(&format!(
+                "  Walking Speed: {:.2}x (raw: {:.4})",
+                walk_mult, abilities.walk_speed
+            ));
             walk_msg.color_named(NamedColor::Yellow);
             let _ = sender.send_message(walk_msg);
 
-            let fly_msg = TextComponent::text(&format!("  Flying Speed: {:.2}x (raw: {:.4})", fly_mult, abilities.fly_speed));
+            let fly_msg = TextComponent::text(&format!(
+                "  Flying Speed: {:.2}x (raw: {:.4})",
+                fly_mult, abilities.fly_speed
+            ));
             fly_msg.color_named(NamedColor::Yellow);
             let _ = sender.send_message(fly_msg);
         }
@@ -256,20 +302,26 @@ impl CommandHandler for ClearExecutor {
             let target_arg = args.get_value("target");
             match target_arg {
                 Arg::Players(players) => players,
-                _ => return Err(CommandError::CommandFailed(TextComponent::text("Invalid target argument!"))),
+                _ => {
+                    return Err(CommandError::CommandFailed(TextComponent::text(
+                        "Invalid target argument!",
+                    )));
+                }
             }
         } else {
             if let Some(player) = sender.as_player() {
                 vec![player]
             } else {
                 return Err(CommandError::CommandFailed(TextComponent::text(
-                    "This command must be executed by a player, or target player(s) must be specified."
+                    "This command must be executed by a player, or target player(s) must be specified.",
                 )));
             }
         };
 
         if targets.is_empty() {
-            return Err(CommandError::CommandFailed(TextComponent::text("No target players found (players are offline or selection is empty).")));
+            return Err(CommandError::CommandFailed(TextComponent::text(
+                "No target players found (players are offline or selection is empty).",
+            )));
         }
 
         let mut state = STATE.lock().unwrap();
@@ -277,7 +329,7 @@ impl CommandHandler for ClearExecutor {
         for player in &targets {
             let id = player.get_id();
             let uuid_str = format!("{:016x}{:016x}", id.high, id.low);
- 
+
             // Clear persistence
             state.player_speeds.remove(&uuid_str);
 
@@ -287,19 +339,39 @@ impl CommandHandler for ClearExecutor {
             abilities.walk_speed = 0.1;
             player.set_abilities(abilities);
 
+            tracing::info!(
+                player_name = player.get_name(),
+                player_uuid = %uuid_str,
+                "Cleared player speed modifiers"
+            );
+
             // Notify
-            let sender_msg = TextComponent::text(&format!("Cleared all speed modifiers for {}", player.get_name()));
+            let sender_msg = TextComponent::text(&format!(
+                "Cleared all speed modifiers for {}",
+                player.get_name()
+            ));
             sender_msg.color_named(NamedColor::Green);
             let _ = sender.send_message(sender_msg);
 
             if sender.get_name() != player.get_name() {
-                let target_msg = TextComponent::text("Your speed modifiers have been cleared and reset to defaults.");
+                let target_msg = TextComponent::text(
+                    "Your speed modifiers have been cleared and reset to defaults.",
+                );
                 target_msg.color_named(NamedColor::Green);
                 player.send_system_message(target_msg, false);
             }
         }
 
-        state.save_speeds();
+        if let Err(err) = state.save_speeds() {
+            tracing::error!(
+                error = %err,
+                "Failed to write persistence file during clear speed operation"
+            );
+            return Err(CommandError::CommandFailed(TextComponent::text(
+                "Internal error: cleared speeds in memory, but failed to write changes to disk.",
+            )));
+        }
+
         Ok(targets.len() as i32)
     }
 }
@@ -319,6 +391,8 @@ impl CommandHandler for ReloadExecutor {
 
         let mut state = STATE.lock().unwrap();
         state.reload_config();
+
+        tracing::info!("Plugin configuration hot-reloaded by administrator");
 
         let msg = TextComponent::text("Plugin configuration reloaded successfully.");
         msg.color_named(NamedColor::Green);

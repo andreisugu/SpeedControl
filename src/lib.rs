@@ -1,20 +1,24 @@
-use std::collections::HashMap;
-use std::sync::{Mutex, LazyLock};
+#![allow(non_snake_case)]
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
+pub mod commands;
 pub mod config;
+pub mod errors;
+pub mod events;
 pub mod persistence;
 pub mod speed_type;
-pub mod commands;
-pub mod events;
 
 use config::PluginConfig;
-use persistence::{PlayerSpeedData, SpeedStore, JsonPlayerSpeedStore};
-use pumpkin_plugin_api::{
-    command_wit::{ArgumentType, Command, CommandNode},
-    Context, Plugin, PluginMetadata,
-};
-use pumpkin_plugin_api::permission::{Permission, PermissionDefault, PermissionLevel};
+use errors::SpeedControlError;
+use persistence::{JsonPlayerSpeedStore, PlayerSpeedData, SpeedStore};
 use pumpkin_plugin_api::events::EventPriority;
+use pumpkin_plugin_api::permission::{Permission, PermissionDefault, PermissionLevel};
+use pumpkin_plugin_api::{
+    Context, Plugin, PluginMetadata,
+    command_wit::{ArgumentType, Command, CommandNode},
+};
 
 pub struct PluginState {
     pub data_folder: String,
@@ -36,15 +40,49 @@ impl PluginState {
     fn init(&mut self, data_folder: String) {
         self.data_folder = data_folder;
         if let Err(err) = std::fs::create_dir_all(&self.data_folder) {
-            tracing::error!("Failed to create data folder '{}': {}", self.data_folder, err);
+            tracing::error!(
+                "Failed to create data folder '{}': {}",
+                self.data_folder,
+                err
+            );
         }
-        
+
         // Initialize config
         self.config = PluginConfig::load(&self.data_folder);
-        
+
+        // Generate config JSON Schema (schema.json) for boundary enforcement
+        let schema = schemars::schema_for!(PluginConfig);
+        let schema_path = format!("{}/schema.json", self.data_folder);
+        match serde_json::to_string_pretty(&schema) {
+            Ok(schema_json) => {
+                if let Err(err) = std::fs::write(&schema_path, schema_json) {
+                    tracing::error!("Failed to save config schema.json: {}", err);
+                } else {
+                    tracing::info!(
+                        "Enforced boundary schema: saved config JSON Schema at '{}'",
+                        schema_path
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::error!("Failed to serialize config JSON Schema: {}", err);
+            }
+        }
+
         // Initialize store and load speeds
         let store = JsonPlayerSpeedStore::new(self.data_folder.clone());
-        self.player_speeds = store.load_speeds();
+        match store.load_speeds() {
+            Ok(speeds) => {
+                self.player_speeds = speeds;
+            }
+            Err(err) => {
+                tracing::error!(
+                    "Failed to load persistent player speeds: {}. Using clean session database.",
+                    err
+                );
+                self.player_speeds = HashMap::new();
+            }
+        }
         self.store = Some(store);
     }
 
@@ -52,9 +90,11 @@ impl PluginState {
         self.config = PluginConfig::load(&self.data_folder);
     }
 
-    pub fn save_speeds(&self) {
+    pub fn save_speeds(&self) -> Result<(), SpeedControlError> {
         if let Some(ref store) = self.store {
-            store.save_speeds(&self.player_speeds);
+            store.save_speeds(&self.player_speeds)
+        } else {
+            Ok(())
         }
     }
 }
@@ -93,24 +133,44 @@ impl Plugin for SpeedPlugin {
         }
 
         // Register player join handler
-        context.register_event_handler(
-            events::PlayerJoinHandler,
-            EventPriority::Normal,
-            false,
-        )?;
+        context.register_event_handler(events::PlayerJoinHandler, EventPriority::Normal, false)?;
 
         // 1. Register Permissions
         let permissions = vec![
             ("SpeedControl:command.speed", "Allows modifying game speeds"),
             ("SpeedControl:command.flyspeed", "Allows setting fly speed"),
-            ("SpeedControl:command.walkspeed", "Allows setting walk speed"),
-            ("SpeedControl:command.elytraspeed", "Allows setting elytra speed"),
-            ("SpeedControl:command.swimspeed", "Allows setting swim speed"),
-            ("SpeedControl:command.attackspeed", "Allows setting combat attack speed"),
-            ("SpeedControl:command.sneakspeed", "Allows setting sneak speed"),
-            ("SpeedControl:command.mountspeed", "Allows setting mount speed"),
-            ("SpeedControl:command.miningspeed", "Allows setting mining speed"),
-            ("SpeedControl:command.reload", "Allows reloading configuration values"),
+            (
+                "SpeedControl:command.walkspeed",
+                "Allows setting walk speed",
+            ),
+            (
+                "SpeedControl:command.elytraspeed",
+                "Allows setting elytra speed",
+            ),
+            (
+                "SpeedControl:command.swimspeed",
+                "Allows setting swim speed",
+            ),
+            (
+                "SpeedControl:command.attackspeed",
+                "Allows setting combat attack speed",
+            ),
+            (
+                "SpeedControl:command.sneakspeed",
+                "Allows setting sneak speed",
+            ),
+            (
+                "SpeedControl:command.mountspeed",
+                "Allows setting mount speed",
+            ),
+            (
+                "SpeedControl:command.miningspeed",
+                "Allows setting mining speed",
+            ),
+            (
+                "SpeedControl:command.reload",
+                "Allows reloading configuration values",
+            ),
         ];
 
         for (node, desc) in permissions {
@@ -123,13 +183,13 @@ impl Plugin for SpeedPlugin {
         }
 
         // 2. Build and Register Command Trees
+        use commands::{ClearExecutor, InfoExecutor, ReloadExecutor, SpeedExecutor};
         use speed_type::SpeedType;
-        use commands::{SpeedExecutor, InfoExecutor, ClearExecutor, ReloadExecutor};
 
         // Unified /speed Command
         let speed_cmd = Command::new(
             &["speed".to_string(), "spd".to_string()],
-            "Modify various speed multipliers"
+            "Modify various speed multipliers",
         );
 
         let types = vec![
@@ -147,13 +207,12 @@ impl Plugin for SpeedPlugin {
             let type_node = CommandNode::literal(literal_name);
 
             // /speed <type> reset
-            let reset_node = CommandNode::literal("reset")
-                .execute(SpeedExecutor {
-                    speed_type,
-                    has_target: false,
-                    is_reset: true,
-                });
-            
+            let reset_node = CommandNode::literal("reset").execute(SpeedExecutor {
+                speed_type,
+                has_target: false,
+                is_reset: true,
+            });
+
             // /speed <type> reset <target>
             let reset_target_node = CommandNode::argument("target", &ArgumentType::Players)
                 .execute(SpeedExecutor {
@@ -164,16 +223,17 @@ impl Plugin for SpeedPlugin {
             reset_node.then(reset_target_node);
 
             // /speed <type> <multiplier>
-            let mult_node = CommandNode::argument("multiplier", &ArgumentType::Float((Some(0.0), Some(100.0))))
-                .execute(SpeedExecutor {
-                    speed_type,
-                    has_target: false,
-                    is_reset: false,
-                });
+            let mult_node =
+                CommandNode::argument("multiplier", &ArgumentType::Float((Some(0.0), Some(100.0))))
+                    .execute(SpeedExecutor {
+                        speed_type,
+                        has_target: false,
+                        is_reset: false,
+                    });
 
             // /speed <type> <multiplier> <target>
-            let mult_target_node = CommandNode::argument("target", &ArgumentType::Players)
-                .execute(SpeedExecutor {
+            let mult_target_node =
+                CommandNode::argument("target", &ArgumentType::Players).execute(SpeedExecutor {
                     speed_type,
                     has_target: true,
                     is_reset: false,
@@ -186,8 +246,7 @@ impl Plugin for SpeedPlugin {
         }
 
         // /speed info
-        let info_node = CommandNode::literal("info")
-            .execute(InfoExecutor { has_target: false });
+        let info_node = CommandNode::literal("info").execute(InfoExecutor { has_target: false });
         // /speed info <target>
         let info_target_node = CommandNode::argument("target", &ArgumentType::Players)
             .execute(InfoExecutor { has_target: true });
@@ -195,8 +254,7 @@ impl Plugin for SpeedPlugin {
         speed_cmd.then(info_node);
 
         // /speed clear
-        let clear_node = CommandNode::literal("clear")
-            .execute(ClearExecutor { has_target: false });
+        let clear_node = CommandNode::literal("clear").execute(ClearExecutor { has_target: false });
         // /speed clear <target>
         let clear_target_node = CommandNode::argument("target", &ArgumentType::Players)
             .execute(ClearExecutor { has_target: true });
@@ -204,8 +262,7 @@ impl Plugin for SpeedPlugin {
         speed_cmd.then(clear_node);
 
         // /speed reload
-        let reload_node = CommandNode::literal("reload")
-            .execute(ReloadExecutor);
+        let reload_node = CommandNode::literal("reload").execute(ReloadExecutor);
         speed_cmd.then(reload_node);
 
         context.register_command(speed_cmd, "SpeedControl:command.speed");
@@ -213,30 +270,30 @@ impl Plugin for SpeedPlugin {
         // Fly Speed Command (Legacy / Alias support)
         let fly_legacy = Command::new(
             &["flyspeed".to_string(), "fs".to_string()],
-            "Set flight speed multiplier"
+            "Set flight speed multiplier",
         );
-        let fly_reset = CommandNode::literal("reset")
-            .execute(SpeedExecutor {
-                speed_type: SpeedType::Fly,
-                has_target: false,
-                is_reset: true,
-            });
-        let fly_reset_target = CommandNode::argument("target", &ArgumentType::Players)
-            .execute(SpeedExecutor {
+        let fly_reset = CommandNode::literal("reset").execute(SpeedExecutor {
+            speed_type: SpeedType::Fly,
+            has_target: false,
+            is_reset: true,
+        });
+        let fly_reset_target =
+            CommandNode::argument("target", &ArgumentType::Players).execute(SpeedExecutor {
                 speed_type: SpeedType::Fly,
                 has_target: true,
                 is_reset: true,
             });
         fly_reset.then(fly_reset_target);
 
-        let fly_mult = CommandNode::argument("multiplier", &ArgumentType::Float((Some(0.0), Some(100.0))))
-            .execute(SpeedExecutor {
-                speed_type: SpeedType::Fly,
-                has_target: false,
-                is_reset: false,
-            });
-        let fly_mult_target = CommandNode::argument("target", &ArgumentType::Players)
-            .execute(SpeedExecutor {
+        let fly_mult =
+            CommandNode::argument("multiplier", &ArgumentType::Float((Some(0.0), Some(100.0))))
+                .execute(SpeedExecutor {
+                    speed_type: SpeedType::Fly,
+                    has_target: false,
+                    is_reset: false,
+                });
+        let fly_mult_target =
+            CommandNode::argument("target", &ArgumentType::Players).execute(SpeedExecutor {
                 speed_type: SpeedType::Fly,
                 has_target: true,
                 is_reset: false,
@@ -249,30 +306,30 @@ impl Plugin for SpeedPlugin {
         // Walk Speed Command (Legacy / Alias support)
         let walk_legacy = Command::new(
             &["walkspeed".to_string(), "ws".to_string()],
-            "Set walking speed multiplier"
+            "Set walking speed multiplier",
         );
-        let walk_reset = CommandNode::literal("reset")
-            .execute(SpeedExecutor {
-                speed_type: SpeedType::Walk,
-                has_target: false,
-                is_reset: true,
-            });
-        let walk_reset_target = CommandNode::argument("target", &ArgumentType::Players)
-            .execute(SpeedExecutor {
+        let walk_reset = CommandNode::literal("reset").execute(SpeedExecutor {
+            speed_type: SpeedType::Walk,
+            has_target: false,
+            is_reset: true,
+        });
+        let walk_reset_target =
+            CommandNode::argument("target", &ArgumentType::Players).execute(SpeedExecutor {
                 speed_type: SpeedType::Walk,
                 has_target: true,
                 is_reset: true,
             });
         walk_reset.then(walk_reset_target);
 
-        let walk_mult = CommandNode::argument("multiplier", &ArgumentType::Float((Some(0.0), Some(100.0))))
-            .execute(SpeedExecutor {
-                speed_type: SpeedType::Walk,
-                has_target: false,
-                is_reset: false,
-            });
-        let walk_mult_target = CommandNode::argument("target", &ArgumentType::Players)
-            .execute(SpeedExecutor {
+        let walk_mult =
+            CommandNode::argument("multiplier", &ArgumentType::Float((Some(0.0), Some(100.0))))
+                .execute(SpeedExecutor {
+                    speed_type: SpeedType::Walk,
+                    has_target: false,
+                    is_reset: false,
+                });
+        let walk_mult_target =
+            CommandNode::argument("target", &ArgumentType::Players).execute(SpeedExecutor {
                 speed_type: SpeedType::Walk,
                 has_target: true,
                 is_reset: false,
