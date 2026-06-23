@@ -7,14 +7,11 @@ targets = []
 
 [advisories]
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
 unmaintained = "all"
 unsound = "all"
 yanked = "deny"
-notice = "warn"
 
 [licenses]
-unlicensed = "deny"
 # Permitted permissive licenses
 allow = [
     "MIT",
@@ -24,9 +21,6 @@ allow = [
     "Unicode-DFS-2016",
     "CC0-1.0",
 ]
-copyleft = "deny"
-# How to handle crates that don't match our allowed list
-default = "deny"
 
 [bans]
 # Deny multiple versions of the same crate to keep binary small
