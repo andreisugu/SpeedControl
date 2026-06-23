@@ -74,8 +74,9 @@ cargo build --release --features "extras,development-logs"
 
 ## 🏗️ Local Development & Automation
 
-A local PowerShell coordination script is provided to manage linting, testing, and deployment:
+Local coordination scripts are provided for both Windows (PowerShell) and Linux/macOS (Bash) environments to manage linting, testing, and deployment:
 
+### Windows (PowerShell)
 ```powershell
 # 1. Standard build, copy to target server, and pre-approve WASM permissions
 .\build.ps1
@@ -88,6 +89,21 @@ A local PowerShell coordination script is provided to manage linting, testing, a
 
 # 4. Clean build outputs, target folders, and duplicate build-checks
 .\build.ps1 -Clean
+```
+
+### Linux & macOS (Bash)
+```bash
+# 1. Standard build, copy to target server, and pre-approve WASM permissions
+./build.sh
+
+# 2. Build with custom feature flags
+./build.sh -f "extras,development-logs"
+
+# 3. Execute quality gates: cargo fmt, clippy, local deny/audit scans, and native tests
+./build.sh -l -t
+
+# 4. Clean build outputs, target folders, and duplicate build-checks
+./build.sh -c
 ```
 
 ---
