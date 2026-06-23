@@ -7,6 +7,7 @@ CLEAN=false
 DEV=false
 LINT=false
 TEST=false
+CI=false
 FEATURES=""
 DEPLOY_DIR="$HOME/Desktop/Pumpkin/plugins"
 
@@ -18,6 +19,7 @@ usage() {
     echo "  --dev, -d          Build using development/debug profile (default is release)"
     echo "  --lint, -l         Run formatting and clippy checks"
     echo "  --test, -t         Run unit tests natively"
+    echo "  --ci               Run all GitHub Actions quality gates and compile on success"
     echo "  --features, -f VAL Specify Cargo features to build with (comma-separated)"
     echo "  --deploy-dir, -o   Deploy directory path (default: ~/Desktop/Pumpkin/plugins)"
     echo "  --help, -h         Show this help message"
@@ -31,6 +33,7 @@ while [[ "$#" -gt 0 ]]; do
         --dev|-d) DEV=true; shift ;;
         --lint|-l) LINT=true; shift ;;
         --test|-t) TEST=true; shift ;;
+        --ci) CI=true; shift ;;
         --features|-f) FEATURES="$2"; shift 2 ;;
         --deploy-dir|-o) DEPLOY_DIR="$2"; shift 2 ;;
         --help|-h) usage ;;
@@ -42,6 +45,56 @@ FEATURE_FLAGS=()
 if [ -n "$FEATURES" ]; then
     echo -e "\033[0;36mCompiling with features: $FEATURES\033[0m"
     FEATURE_FLAGS=("--features" "$FEATURES")
+fi
+
+if [ "$CI" = true ]; then
+    echo -e "\033[0;32mExecuting FULL CI WORKFLOW verification...\033[0m"
+
+    # 1. Formatting
+    echo -e "\033[0;36m1. Running cargo fmt check...\033[0m"
+    cargo fmt --all -- --check
+
+    # 2. Clippy (All features, warnings as errors)
+    echo -e "\033[0;36m2. Running clippy verification...\033[0m"
+    cargo clippy --all-targets --all-features -- -D warnings
+
+    # 3. Cargo Deny (Fail if missing or fails)
+    echo -e "\033[0;36m3. Running cargo deny check...\033[0m"
+    if ! command -v cargo-deny &> /dev/null; then
+        echo -e "\033[0;31mError: cargo-deny is required for CI verification! Please install it: cargo install --locked cargo-deny\033[0m"
+        exit 1
+    fi
+    cargo deny check
+
+    # 4. Cargo Audit (Fail if missing or fails)
+    echo -e "\033[0;36m4. Running cargo audit...\033[0m"
+    if ! command -v cargo-audit &> /dev/null; then
+        echo -e "\033[0;31mError: cargo-audit is required for CI verification! Please install it: cargo install cargo-audit --locked\033[0m"
+        exit 1
+    fi
+    cargo audit
+
+    # Resolve host
+    RUSTC_HOST=$(rustc -vV | grep "host:" | cut -d ' ' -f 2)
+    echo -e "\033[0;36mDetected native host target: $RUSTC_HOST\033[0m"
+
+    # 5. Native unit tests (No features)
+    echo -e "\033[0;36m5. Running unit tests with no features...\033[0m"
+    cargo test --no-default-features --target "$RUSTC_HOST"
+
+    # 6. Native unit tests (All features)
+    echo -e "\033[0;36m6. Running unit tests with all features...\033[0m"
+    cargo test --all-features --target "$RUSTC_HOST"
+
+    echo -e "\033[0;32mVerification succeeded! Building release WASM artifact...\033[0m"
+    
+    # Overwrite options for build phase
+    DEV=false
+    CLEAN=false
+    LINT=false
+    TEST=false
+    FEATURES=""
+    FEATURE_FLAGS=()
 fi
 
 # 1. Clean

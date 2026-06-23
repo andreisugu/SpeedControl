@@ -89,6 +89,9 @@ Local coordination scripts are provided for both Windows (PowerShell) and Linux/
 
 # 4. Clean build outputs, target folders, and duplicate build-checks
 .\build.ps1 -Clean
+
+# 5. Full CI Workflow: checks EVERYTHING (fmt, clippy warnings-as-errors, deny, audit, tests under all feature matrices) and builds only on success
+.\build.ps1 -CI
 ```
 
 ### Linux & macOS (Bash)
@@ -104,6 +107,9 @@ Local coordination scripts are provided for both Windows (PowerShell) and Linux/
 
 # 4. Clean build outputs, target folders, and duplicate build-checks
 ./build.sh -c
+
+# 5. Full CI Workflow: checks EVERYTHING (fmt, clippy warnings-as-errors, deny, audit, tests under all feature matrices) and builds only on success
+./build.sh --ci
 ```
 
 ---

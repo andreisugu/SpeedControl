@@ -13,6 +13,7 @@ param(
     [switch]$Dev,
     [switch]$Lint,
     [switch]$Test,
+    [switch]$CI,
     [string]$Features,
     [string]$DeployDir = "C:\Users\RestlessGlass\Desktop\Pumpkin\plugins"
 )
@@ -22,6 +23,80 @@ $featureFlags = @()
 if ($Features) {
     Write-Host "Compiling with features: $Features" -ForegroundColor Cyan
     $featureFlags = @("--features", $Features)
+}
+
+if ($CI) {
+    Write-Host "Executing FULL CI WORKFLOW verification..." -ForegroundColor Green
+    
+    # 1. Clean format check
+    Write-Host "1. Running cargo fmt check..." -ForegroundColor Cyan
+    cargo fmt --all -- --check
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Formatting verification failed!"
+        exit $LASTEXITCODE
+    }
+
+    # 2. Clippy check (All Features, treat warnings as errors)
+    Write-Host "2. Running cargo clippy --all-features..." -ForegroundColor Cyan
+    cargo clippy --all-targets --all-features -- -D warnings
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Clippy verification failed!"
+        exit $LASTEXITCODE
+    }
+
+    # 3. Cargo Deny Check (All Features, fail if missing)
+    Write-Host "3. Running cargo deny check..." -ForegroundColor Cyan
+    if (-not (Get-Command "cargo-deny" -ErrorAction SilentlyContinue)) {
+        Write-Error "cargo-deny is required for CI verification! Please install it: cargo install --locked cargo-deny"
+        exit 1
+    }
+    cargo deny check
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Cargo deny check failed!"
+        exit $LASTEXITCODE
+    }
+
+    # 4. Cargo Audit Check (fail if missing)
+    Write-Host "4. Running cargo audit..." -ForegroundColor Cyan
+    if (-not (Get-Command "cargo-audit" -ErrorAction SilentlyContinue)) {
+        Write-Error "cargo-audit is required for CI verification! Please install it: cargo install cargo-audit --locked"
+        exit 1
+    }
+    cargo audit
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Cargo audit scan failed!"
+        exit $LASTEXITCODE
+    }
+
+    # Resolve native host target
+    $rustcHost = (rustc -vV | Select-String "host:").Line.Split(" ")[1].Trim()
+    Write-Host "Detected native host target: $rustcHost" -ForegroundColor Cyan
+
+    # 5. Run tests under No Features
+    Write-Host "5. Running unit tests with no features..." -ForegroundColor Cyan
+    cargo test --no-default-features --target $rustcHost
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Unit tests with no features failed!"
+        exit $LASTEXITCODE
+    }
+
+    # 6. Run tests under All Features
+    Write-Host "6. Running unit tests with all features..." -ForegroundColor Cyan
+    cargo test --all-features --target $rustcHost
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Unit tests with all features failed!"
+        exit $LASTEXITCODE
+    }
+
+    Write-Host "Verification succeeded! Building release WASM artifact..." -ForegroundColor Green
+    
+    # Force release profile for build phase
+    $Dev = $false
+    $Clean = $false
+    $Lint = $false
+    $Test = $false
+    $Features = ""
+    $featureFlags = @()
 }
 
 # 1. Clean target folders if requested
